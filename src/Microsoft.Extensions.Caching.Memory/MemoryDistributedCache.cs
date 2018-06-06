@@ -2,8 +2,10 @@
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 
 namespace Microsoft.Extensions.Caching.Distributed
 {
@@ -13,14 +15,14 @@ namespace Microsoft.Extensions.Caching.Distributed
 
         private readonly IMemoryCache _memCache;
 
-        public MemoryDistributedCache(IMemoryCache memoryCache)
+        public MemoryDistributedCache(IOptions<MemoryDistributedCacheOptions> optionsAccessor)
         {
-            if (memoryCache == null)
+            if (optionsAccessor == null)
             {
-                throw new ArgumentNullException(nameof(memoryCache));
+                throw new ArgumentNullException(nameof(optionsAccessor));
             }
 
-            _memCache = memoryCache;
+            _memCache = new MemoryCache(optionsAccessor.Value);
         }
 
         public byte[] Get(string key)
@@ -33,7 +35,7 @@ namespace Microsoft.Extensions.Caching.Distributed
             return (byte[])_memCache.Get(key);
         }
 
-        public Task<byte[]> GetAsync(string key)
+        public Task<byte[]> GetAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
@@ -64,11 +66,12 @@ namespace Microsoft.Extensions.Caching.Distributed
             memoryCacheEntryOptions.AbsoluteExpiration = options.AbsoluteExpiration;
             memoryCacheEntryOptions.AbsoluteExpirationRelativeToNow = options.AbsoluteExpirationRelativeToNow;
             memoryCacheEntryOptions.SlidingExpiration = options.SlidingExpiration;
+            memoryCacheEntryOptions.Size = value.Length;
 
             _memCache.Set(key, value, memoryCacheEntryOptions);
         }
 
-        public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options)
+        public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
@@ -96,11 +99,10 @@ namespace Microsoft.Extensions.Caching.Distributed
                 throw new ArgumentNullException(nameof(key));
             }
 
-            object value;
-            _memCache.TryGetValue(key, out value);
+            _memCache.TryGetValue(key, out object value);
         }
 
-        public Task RefreshAsync(string key)
+        public Task RefreshAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
@@ -121,7 +123,7 @@ namespace Microsoft.Extensions.Caching.Distributed
             _memCache.Remove(key);
         }
 
-        public Task RemoveAsync(string key)
+        public Task RemoveAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {

@@ -60,14 +60,16 @@ namespace Microsoft.Extensions.Caching.Redis
             return GetAndRefresh(key, getData: true);
         }
 
-        public async Task<byte[]> GetAsync(string key)
+        public async Task<byte[]> GetAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
             }
 
-            return await GetAndRefreshAsync(key, getData: true);
+            token.ThrowIfCancellationRequested();
+
+            return await GetAndRefreshAsync(key, getData: true, token: token);
         }
 
         public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
@@ -103,7 +105,7 @@ namespace Microsoft.Extensions.Caching.Redis
                 });
         }
 
-        public async Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options)
+        public async Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
@@ -120,7 +122,9 @@ namespace Microsoft.Extensions.Caching.Redis
                 throw new ArgumentNullException(nameof(options));
             }
 
-            await ConnectAsync();
+            token.ThrowIfCancellationRequested();
+
+            await ConnectAsync(token);
 
             var creationTime = DateTimeOffset.UtcNow;
 
@@ -146,19 +150,21 @@ namespace Microsoft.Extensions.Caching.Redis
             GetAndRefresh(key, getData: false);
         }
 
-        public async Task RefreshAsync(string key)
+        public async Task RefreshAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
             }
 
-            await GetAndRefreshAsync(key, getData: false);
+            token.ThrowIfCancellationRequested();
+
+            await GetAndRefreshAsync(key, getData: false, token: token);
         }
 
         private void Connect()
         {
-            if (_connection != null)
+            if (_cache != null)
             {
                 return;
             }
@@ -166,9 +172,16 @@ namespace Microsoft.Extensions.Caching.Redis
             _connectionLock.Wait();
             try
             {
-                if (_connection == null)
+                if (_cache == null)
                 {
-                    _connection = ConnectionMultiplexer.Connect(_options.Configuration);
+                    if (_options.ConfigurationOptions != null)
+                    {
+                        _connection = ConnectionMultiplexer.Connect(_options.ConfigurationOptions);
+                    }
+                    else
+                    {
+                        _connection = ConnectionMultiplexer.Connect(_options.Configuration);                        
+                    }
                     _cache = _connection.GetDatabase();
                 }
             }
@@ -178,19 +191,29 @@ namespace Microsoft.Extensions.Caching.Redis
             }
         }
 
-        private async Task ConnectAsync()
+        private async Task ConnectAsync(CancellationToken token = default(CancellationToken))
         {
-            if (_connection != null)
+            token.ThrowIfCancellationRequested();
+
+            if (_cache != null)
             {
                 return;
             }
 
-            await _connectionLock.WaitAsync();
+            await _connectionLock.WaitAsync(token);
             try
             {
-                if (_connection == null)
+                if (_cache == null)
                 {
-                    _connection = await ConnectionMultiplexer.ConnectAsync(_options.Configuration);
+                    if (_options.ConfigurationOptions != null)
+                    {
+                        _connection = await ConnectionMultiplexer.ConnectAsync(_options.ConfigurationOptions);
+                    }
+                    else
+                    {
+                        _connection = await ConnectionMultiplexer.ConnectAsync(_options.Configuration);                  
+                    }
+                    
                     _cache = _connection.GetDatabase();
                 }
             }
@@ -224,11 +247,7 @@ namespace Microsoft.Extensions.Caching.Redis
             // TODO: Error handling
             if (results.Length >= 2)
             {
-                // Note we always get back two results, even if they are all null.
-                // These operations will no-op in the null scenario.
-                DateTimeOffset? absExpr;
-                TimeSpan? sldExpr;
-                MapMetadata(results, out absExpr, out sldExpr);
+                MapMetadata(results, out DateTimeOffset? absExpr, out TimeSpan? sldExpr);
                 Refresh(key, absExpr, sldExpr);
             }
 
@@ -240,14 +259,16 @@ namespace Microsoft.Extensions.Caching.Redis
             return null;
         }
 
-        private async Task<byte[]> GetAndRefreshAsync(string key, bool getData)
+        private async Task<byte[]> GetAndRefreshAsync(string key, bool getData, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
             }
 
-            await ConnectAsync();
+            token.ThrowIfCancellationRequested();
+
+            await ConnectAsync(token);
 
             // This also resets the LRU status as desired.
             // TODO: Can this be done in one operation on the server side? Probably, the trick would just be the DateTimeOffset math.
@@ -264,12 +285,8 @@ namespace Microsoft.Extensions.Caching.Redis
             // TODO: Error handling
             if (results.Length >= 2)
             {
-                // Note we always get back two results, even if they are all null.
-                // These operations will no-op in the null scenario.
-                DateTimeOffset? absExpr;
-                TimeSpan? sldExpr;
-                MapMetadata(results, out absExpr, out sldExpr);
-                await RefreshAsync(key, absExpr, sldExpr);
+                MapMetadata(results, out DateTimeOffset? absExpr, out TimeSpan? sldExpr);
+                await RefreshAsync(key, absExpr, sldExpr, token);
             }
 
             if (results.Length >= 3 && results[2].HasValue)
@@ -293,14 +310,14 @@ namespace Microsoft.Extensions.Caching.Redis
             // TODO: Error handling
         }
 
-        public async Task RemoveAsync(string key)
+        public async Task RemoveAsync(string key, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
             }
 
-            await ConnectAsync();
+            await ConnectAsync(token);
 
             await _cache.KeyDeleteAsync(_instance + key);
             // TODO: Error handling
@@ -347,12 +364,14 @@ namespace Microsoft.Extensions.Caching.Redis
             }
         }
 
-        private async Task RefreshAsync(string key, DateTimeOffset? absExpr, TimeSpan? sldExpr)
+        private async Task RefreshAsync(string key, DateTimeOffset? absExpr, TimeSpan? sldExpr, CancellationToken token = default(CancellationToken))
         {
             if (key == null)
             {
                 throw new ArgumentNullException(nameof(key));
             }
+
+            token.ThrowIfCancellationRequested();
 
             // Note Refresh has no effect if there is just an absolute expiration (or neither).
             TimeSpan? expr = null;

@@ -9,31 +9,29 @@ namespace Microsoft.Extensions.Caching.Memory
 {
     public static class CacheExtensions
     {
-
         public static object Get(this IMemoryCache cache, object key)
         {
-            object value = null;
-            cache.TryGetValue(key, out value);
+            cache.TryGetValue(key, out object value);
             return value;
         }
 
         public static TItem Get<TItem>(this IMemoryCache cache, object key)
         {
-            TItem value;
-            cache.TryGetValue<TItem>(key, out value);
-            return value;
+            return (TItem)(cache.Get(key) ?? default(TItem));
         }
 
         public static bool TryGetValue<TItem>(this IMemoryCache cache, object key, out TItem value)
         {
-            object result;
-            if (cache.TryGetValue(key, out result))
+            if (cache.TryGetValue(key, out object result))
             {
-                value = (TItem)result;
-                return true;
+                if (result is TItem item)
+                {
+                    value = item;
+                    return true;
+                }
             }
 
-            value = default(TItem);
+            value = default;
             return false;
         }
 
@@ -93,8 +91,7 @@ namespace Microsoft.Extensions.Caching.Memory
 
         public static TItem GetOrCreate<TItem>(this IMemoryCache cache, object key, Func<ICacheEntry, TItem> factory)
         {
-            object result;
-            if (!cache.TryGetValue(key, out result))
+            if (!cache.TryGetValue(key, out object result))
             {
                 var entry = cache.CreateEntry(key);
                 result = factory(entry);
@@ -110,8 +107,7 @@ namespace Microsoft.Extensions.Caching.Memory
 
         public static async Task<TItem> GetOrCreateAsync<TItem>(this IMemoryCache cache, object key, Func<ICacheEntry, Task<TItem>> factory)
         {
-            object result;
-            if (!cache.TryGetValue(key, out result))
+            if (!cache.TryGetValue(key, out object result))
             {
                 var entry = cache.CreateEntry(key);
                 result = await factory(entry);

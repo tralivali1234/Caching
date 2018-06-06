@@ -179,8 +179,7 @@ namespace Microsoft.Extensions.Caching.Memory
             {
             }
 
-            int obj;
-            Assert.False(cache.TryGetValue(key, out obj));
+            Assert.False(cache.TryGetValue(key, out int obj));
         }
 
         [Fact]
@@ -199,8 +198,19 @@ namespace Microsoft.Extensions.Caching.Memory
             {
             }
 
-            int obj;
-            Assert.False(cache.TryGetValue(key, out obj));
+            Assert.False(cache.TryGetValue(key, out int obj));
+        }
+
+        [Fact]
+        public void TryGetValue_WillCreateDefaultValue_WhenGenericTypeIsIncompatible()
+        {
+            var cache = CreateCache();
+            string key = "myKey";
+            int value = 42;
+
+            cache.Set(key, value);
+
+            Assert.False(cache.TryGetValue(key, out string obj));
         }
 
         [Fact]
@@ -444,7 +454,7 @@ namespace Microsoft.Extensions.Caching.Memory
                 }
             });
 
-            var task3 = Task.Delay(TimeSpan.FromSeconds(10));
+            var task3 = Task.Delay(TimeSpan.FromSeconds(7));
 
             Task.WaitAny(task0, task1, task2, task3);
 
@@ -456,6 +466,175 @@ namespace Microsoft.Extensions.Caching.Memory
 
             cts.Cancel();
             Task.WaitAll(task0, task1, task2, task3);
+        }
+
+        [Fact]
+        public void OvercapacityPurge_AreThreadSafe()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions
+            {
+                ExpirationScanFrequency = TimeSpan.Zero,
+                SizeLimit = 10,
+                CompactionPercentage = 0.5
+            });
+            var cts = new CancellationTokenSource();
+            var limitExceeded = false;
+
+            var task0 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    if (cache.Size > 10)
+                    {
+                        limitExceeded = true;
+                        break;
+                    }
+                    cache.Set(Guid.NewGuid(), Guid.NewGuid(), new MemoryCacheEntryOptions { Size = 1 });
+                }
+            }, cts.Token);
+
+            var task1 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    if (cache.Size > 10)
+                    {
+                        limitExceeded = true;
+                        break;
+                    }
+                    cache.Set(Guid.NewGuid(), Guid.NewGuid(), new MemoryCacheEntryOptions { Size = 1 });
+                }
+            }, cts.Token);
+
+            var task2 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    if (cache.Size > 10)
+                    {
+                        limitExceeded = true;
+                        break;
+                    }
+                    cache.Set(Guid.NewGuid(), Guid.NewGuid(), new MemoryCacheEntryOptions { Size = 1 });
+                }
+            }, cts.Token);
+
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            var task3 = Task.Delay(TimeSpan.FromSeconds(7));
+
+            Task.WaitAll(task0, task1, task2, task3);
+
+            Assert.Equal(TaskStatus.RanToCompletion, task0.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task1.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task2.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task3.Status);
+            Assert.Equal(cache.Count, cache.Size);
+            Assert.InRange(cache.Count, 0, 10);
+            Assert.False(limitExceeded);
+        }
+
+        [Fact]
+        public void AddAndReplaceEntries_AreThreadSafe()
+        {
+            var cache = new MemoryCache(new MemoryCacheOptions
+            {
+                ExpirationScanFrequency = TimeSpan.Zero,
+                SizeLimit = 20,
+                CompactionPercentage = 0.5
+            });
+            var cts = new CancellationTokenSource();
+
+            var random = new Random();
+
+            var task0 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    var entrySize = random.Next(0, 5);
+                    cache.Set(random.Next(0, 10), entrySize, new MemoryCacheEntryOptions { Size = entrySize });
+                }
+            }, cts.Token);
+
+            var task1 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    var entrySize = random.Next(0, 5);
+                    cache.Set(random.Next(0, 10), entrySize, new MemoryCacheEntryOptions { Size = entrySize });
+                }
+            }, cts.Token);
+
+            var task2 = Task.Run(() =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    var entrySize = random.Next(0, 5);
+                    cache.Set(random.Next(0, 10), entrySize, new MemoryCacheEntryOptions { Size = entrySize });
+                }
+            }, cts.Token);
+
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            var task3 = Task.Delay(TimeSpan.FromSeconds(7));
+
+            Task.WaitAll(task0, task1, task2, task3);
+
+            Assert.Equal(TaskStatus.RanToCompletion, task0.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task1.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task2.Status);
+            Assert.Equal(TaskStatus.RanToCompletion, task3.Status);
+
+            var cacheSize = 0;
+            for (var i = 0; i < 10; i++)
+            {
+                cacheSize += cache.Get<int>(i);
+            }
+
+            Assert.Equal(cacheSize, cache.Size);
+            Assert.InRange(cache.Count, 0, 20);
+        }
+
+        [Fact]
+        public void GetDataFromCacheWithNullKeyThrows()
+        {
+            var cache = CreateCache();
+            Assert.Throws<ArgumentNullException>(() => cache.Get(null));
+        }
+
+        [Fact]
+        public void SetDataToCacheWithNullKeyThrows()
+        {
+            var cache = CreateCache();
+            var value = new object();
+            Assert.Throws<ArgumentNullException>(() => cache.Set(null, value));
+        }
+
+        [Fact]
+        public void SetDataToCacheWithNullKeyAndChangeTokenThrows()
+        {
+            var cache = CreateCache();
+            var value = new object();
+            Assert.Throws<ArgumentNullException>(() => cache.Set(null, value, expirationToken: null));
+        }
+
+        [Fact]
+        public void TryGetValueFromCacheWithNullKeyThrows()
+        {
+            var cache = CreateCache();
+            Assert.Throws<ArgumentNullException>(() => cache.TryGetValue(null,out long result));
+        }
+
+        [Fact]
+        public void GetOrCreateFromCacheWithNullKeyThrows()
+        {
+            var cache = CreateCache();
+            Assert.Throws<ArgumentNullException>(() => cache.GetOrCreate<object>(null, null))
+;       }
+
+        [Fact]
+        public async Task GetOrCreateAsyncFromCacheWithNullKeyThrows()
+        {
+            var cache = CreateCache();
+            await Assert.ThrowsAsync<ArgumentNullException>(async () => await cache.GetOrCreateAsync<object>(null, null));
         }
 
         private class TestKey
